@@ -91,13 +91,92 @@ int object_exists(const ObjectID *id) {
 //
 
 //
-// Returns 0 on success, -1 on error.
-int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
-    // TODO: Implement
-    (void)type; (void)data; (void)len; (void)id_out;
-    return -1;
-}
+// Returns 0 on success, -1 on erro
 
+int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
+    const char *type_str;
+    if (type == OBJ_BLOB) type_str = "blob";
+    else if (type == OBJ_TREE) type_str = "tree";
+    else if (type == OBJ_COMMIT) type_str = "commit";
+    else return -1;
+
+    // Header
+    char header[64];
+    int header_len = snprintf(header, sizeof(header), "%s %zu", type_str, len) + 1;
+
+    // Combine
+    size_t total_len = header_len + len;
+    unsigned char *buf = malloc(total_len);
+    if (!buf) return -1;
+
+    memcpy(buf, header, header_len);
+    memcpy(buf + header_len, data, len);
+
+    // Hash
+    compute_hash(buf, total_len, id_out);
+
+    // Dedup
+    if (object_exists(id_out)) {
+        free(buf);
+        return 0;
+    }
+
+    // Build path
+    char path[512];
+    object_path(id_out, path, sizeof(path));
+
+    // 🔥 IMPORTANT FIX: create full directory structure
+    mkdir(".pes", 0755);
+    mkdir(".pes/objects", 0755);
+
+    // Extract shard dir
+    char dir[512];
+    strncpy(dir, path, sizeof(dir));
+    dir[sizeof(dir) - 1] = '\0';
+
+    char *slash = strrchr(dir, '/');
+    if (!slash) {
+        free(buf);
+        return -1;
+    }
+    *slash = '\0';
+
+    mkdir(dir, 0755);
+
+    // Temp file
+    char temp_path[512];
+    snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+
+    int fd = open(temp_path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        free(buf);
+        return -1;
+    }
+
+    if (write(fd, buf, total_len) != (ssize_t)total_len) {
+        close(fd);
+        free(buf);
+        return -1;
+    }
+
+    fsync(fd);
+    close(fd);
+
+    if (rename(temp_path, path) != 0) {
+        free(buf);
+        return -1;
+    }
+
+    // fsync dir (ignore errors)
+    int dir_fd = open(dir, O_DIRECTORY);
+    if (dir_fd >= 0) {
+        fsync(dir_fd);
+        close(dir_fd);
+    }
+
+    free(buf);
+    return 0;
+}
 // Read an object from the store.
 //
 // Steps:
