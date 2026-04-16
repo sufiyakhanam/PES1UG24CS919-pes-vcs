@@ -100,11 +100,9 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     else if (type == OBJ_COMMIT) type_str = "commit";
     else return -1;
 
-    // Header
     char header[64];
     int header_len = snprintf(header, sizeof(header), "%s %zu", type_str, len) + 1;
 
-    // Combine
     size_t total_len = header_len + len;
     unsigned char *buf = malloc(total_len);
     if (!buf) return -1;
@@ -112,24 +110,19 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     memcpy(buf, header, header_len);
     memcpy(buf + header_len, data, len);
 
-    // Hash
     compute_hash(buf, total_len, id_out);
 
-    // Dedup
     if (object_exists(id_out)) {
         free(buf);
         return 0;
     }
 
-    // Build path
     char path[512];
     object_path(id_out, path, sizeof(path));
 
-    // 🔥 IMPORTANT FIX: create full directory structure
     mkdir(".pes", 0755);
     mkdir(".pes/objects", 0755);
 
-    // Extract shard dir
     char dir[512];
     strncpy(dir, path, sizeof(dir));
     dir[sizeof(dir) - 1] = '\0';
@@ -143,7 +136,6 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 
     mkdir(dir, 0755);
 
-    // Temp file
     char temp_path[512];
     snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
 
@@ -162,17 +154,7 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     fsync(fd);
     close(fd);
 
-    if (rename(temp_path, path) != 0) {
-        free(buf);
-        return -1;
-    }
-
-    // fsync dir (ignore errors)
-    int dir_fd = open(dir, O_DIRECTORY);
-    if (dir_fd >= 0) {
-        fsync(dir_fd);
-        close(dir_fd);
-    }
+    rename(temp_path, path);
 
     free(buf);
     return 0;
