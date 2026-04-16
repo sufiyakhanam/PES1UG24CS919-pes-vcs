@@ -24,6 +24,9 @@
 #include <unistd.h>
 #include <dirent.h>
 
+int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out);
+uint32_t get_file_mode(const char *path);
+
 // ─── PROVIDED ────────────────────────────────────────────────────────────────
 
 // Find an index entry by path (linear scan).
@@ -171,32 +174,46 @@ static int compare_index_entries(const void *a, const void *b) {
 }
 
 int index_save(const Index *index) {
+    if (index->count < 0 || index->count > MAX_INDEX_ENTRIES) {
+        fprintf(stderr, "error: invalid index count\n");
+        return -1;
+    }
+
     char temp_path[256];
     snprintf(temp_path, sizeof(temp_path), "%s.tmp", INDEX_FILE);
 
     FILE *f = fopen(temp_path, "w");
     if (!f) return -1;
 
-    Index sorted = *index;
-    qsort(sorted.entries, sorted.count, sizeof(IndexEntry), compare_index_entries);
+    // 🔥 FIX: use heap instead of stack
+    IndexEntry *temp = malloc(index->count * sizeof(IndexEntry));
+    if (!temp) {
+        fclose(f);
+        return -1;
+    }
 
-    for (int i = 0; i < sorted.count; i++) {
+    memcpy(temp, index->entries, index->count * sizeof(IndexEntry));
+
+    qsort(temp, index->count, sizeof(IndexEntry), compare_index_entries);
+
+    for (int i = 0; i < index->count; i++) {
         char hash_hex[HASH_HEX_SIZE + 1];
-        hash_to_hex(&sorted.entries[i].hash, hash_hex);
+        hash_to_hex(&temp[i].hash, hash_hex);
 
         fprintf(f, "%o %s %ld %zu %s\n",
-                sorted.entries[i].mode,
+                temp[i].mode,
                 hash_hex,
-                sorted.entries[i].mtime_sec,
-                sorted.entries[i].size,
-                sorted.entries[i].path);
+                temp[i].mtime_sec,
+                temp[i].size,
+                temp[i].path);
     }
 
     fflush(f);
-    fsync(fileno(f));
     fclose(f);
 
     rename(temp_path, INDEX_FILE);
+
+    free(temp);   // 🔥 important
     return 0;
 }
 
@@ -248,11 +265,16 @@ int index_add(Index *index, const char *path) {
     // 6. Find or create entry
     IndexEntry *e = index_find(index, path);
     if (!e) {
+        //SAFETY CHECK
+        if (index->count >= MAX_INDEX_ENTRIES) {
+            fprintf(stderr, "error: index full\n");
+            return -1;
+        }
         e = &index->entries[index->count++];
     }
 
     // 7. Fill entry
-    e->mode = get_file_mode(path);
+    e->mode = 0100644;
     e->hash = id;
     e->mtime_sec = st.st_mtime;
     e->size = st.st_size;
@@ -260,5 +282,5 @@ int index_add(Index *index, const char *path) {
     strncpy(e->path, path, sizeof(e->path));
     e->path[sizeof(e->path) - 1] = '\0';
 
-    return 0;
+    return index_save(index);
 }
