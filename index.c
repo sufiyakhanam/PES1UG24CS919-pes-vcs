@@ -138,17 +138,14 @@ int index_load(Index *index) {
     index->count = 0;
 
     FILE *f = fopen(INDEX_FILE, "r");
-    if (!f) {
-        return 0; // empty index is valid
-    }
+    if (!f) return 0; // empty index is valid
 
-    while (!feof(f)) {
+    while (1) {
         IndexEntry *e = &index->entries[index->count];
-
         char hash_hex[HASH_HEX_SIZE + 1];
 
         if (fscanf(f, "%o %64s %ld %zu %[^\n]\n",
-                   &e->mode, hash_hex, &e->mtime, &e->size, e->path) != 5) {
+                   &e->mode, hash_hex, &e->mtime_sec, &e->size, e->path) != 5) {
             break;
         }
 
@@ -159,7 +156,6 @@ int index_load(Index *index) {
     fclose(f);
     return 0;
 }
-
 // Save the index to .pes/index atomically.
 //
 // HINTS - Useful functions and syscalls:
@@ -191,11 +187,13 @@ int index_save(const Index *index) {
         fprintf(f, "%o %s %ld %zu %s\n",
                 sorted.entries[i].mode,
                 hash_hex,
-                sorted.entries[i].mtime,
+                sorted.entries[i].mtime_sec,
                 sorted.entries[i].size,
                 sorted.entries[i].path);
     }
 
+    fflush(f);
+    fsync(fileno(f));
     fclose(f);
 
     rename(temp_path, INDEX_FILE);
@@ -228,36 +226,35 @@ int index_add(Index *index, const char *path) {
         return -1;
     }
 
-    fread(data, 1, size, f);
+    if (fread(data, 1, size, f) != size) {
+        fclose(f);
+        free(data);
+        return -1;
+    }
     fclose(f);
 
-    // 4. Write blob
+    // 4. Store as blob
     ObjectID id;
     if (object_write(OBJ_BLOB, data, size, &id) != 0) {
         free(data);
         return -1;
     }
-
     free(data);
 
-    // 5. Get file metadata
+    // 5. Get metadata
     struct stat st;
-    stat(path, &st);
+    if (stat(path, &st) != 0) return -1;
 
-    // 6. Check if exists
-    int idx = index_find(index, path);
-
-    IndexEntry *e;
-    if (idx >= 0) {
-        e = &index->entries[idx];
-    } else {
+    // 6. Find or create entry
+    IndexEntry *e = index_find(index, path);
+    if (!e) {
         e = &index->entries[index->count++];
     }
 
     // 7. Fill entry
     e->mode = get_file_mode(path);
     e->hash = id;
-    e->mtime = st.st_mtime;
+    e->mtime_sec = st.st_mtime;
     e->size = st.st_size;
 
     strncpy(e->path, path, sizeof(e->path));
