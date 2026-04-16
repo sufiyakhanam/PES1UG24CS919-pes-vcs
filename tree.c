@@ -129,35 +129,44 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 //   - object_write    : save that binary buffer to the store as OBJ_TREE
 // 
 //  Returns 0 on success, -1 on error.
+// Helper: recursively build tree
+
+// Recursive helper
+// Recursive helper
+// Recursive helper
 static int build_tree(IndexEntry *entries, int count, ObjectID *id_out) {
     Tree tree;
     tree.count = 0;
 
-    // Temporary storage for subdirectories
-    char dirs[MAX_INDEX_ENTRIES][256];
+    // 🔥 FIX: heap allocation (avoid stack overflow)
+    char (*dirs)[256] = malloc(MAX_INDEX_ENTRIES * sizeof(*dirs));
+    if (!dirs) return -1;
+
     int dir_count = 0;
 
+    // Step 1: separate files & directories
     for (int i = 0; i < count; i++) {
         char *path = entries[i].path;
-
         char *slash = strchr(path, '/');
 
         if (!slash) {
-            // File → add directly
-            TreeEntry *t = &tree.entries[tree.count++];
+            if (tree.count >= MAX_TREE_ENTRIES) {
+                free(dirs);
+                return -1;
+            }
 
+            TreeEntry *t = &tree.entries[tree.count++];
             t->mode = entries[i].mode;
             strcpy(t->name, path);
             t->hash = entries[i].hash;
 
         } else {
-            // Directory → extract dir name
             int len = slash - path;
             char dirname[256];
+
             strncpy(dirname, path, len);
             dirname[len] = '\0';
 
-            // Check if already added
             int exists = 0;
             for (int j = 0; j < dir_count; j++) {
                 if (strcmp(dirs[j], dirname) == 0) {
@@ -172,50 +181,78 @@ static int build_tree(IndexEntry *entries, int count, ObjectID *id_out) {
         }
     }
 
-    // Handle subdirectories recursively
+    // Step 2: recursive directory handling
     for (int d = 0; d < dir_count; d++) {
-        IndexEntry sub_entries[MAX_INDEX_ENTRIES];
-        int sub_count = 0;
-
         int len = strlen(dirs[d]);
+
+        IndexEntry *sub_entries = malloc(count * sizeof(IndexEntry));
+        if (!sub_entries) {
+            free(dirs);
+            return -1;
+        }
+
+        int sub_count = 0;
 
         for (int i = 0; i < count; i++) {
             if (strncmp(entries[i].path, dirs[d], len) == 0 &&
                 entries[i].path[len] == '/') {
 
-                sub_entries[sub_count] = entries[i];
+                IndexEntry *dst = &sub_entries[sub_count];
+                IndexEntry *src = &entries[i];
 
-                // remove "dir/" prefix
-                memmove(sub_entries[sub_count].path,
-                        sub_entries[sub_count].path + len + 1,
-                        strlen(sub_entries[sub_count].path) - len);
+                dst->mode = src->mode;
+                dst->hash = src->hash;
+                dst->mtime_sec = src->mtime_sec;
+                dst->size = src->size;
+
+                char *new_path = src->path + len + 1;
+                strcpy(dst->path, new_path);
 
                 sub_count++;
             }
         }
 
+        if (sub_count == 0) {
+            free(sub_entries);
+            continue;
+        }
+
         ObjectID sub_id;
-        if (build_tree(sub_entries, sub_count, &sub_id) != 0)
+        if (build_tree(sub_entries, sub_count, &sub_id) != 0) {
+            free(sub_entries);
+            free(dirs);
             return -1;
+        }
+
+        free(sub_entries);
+
+        if (tree.count >= MAX_TREE_ENTRIES) {
+            free(dirs);
+            return -1;
+        }
 
         TreeEntry *t = &tree.entries[tree.count++];
-        t->mode = 040000;   // directory
+        t->mode = MODE_DIR;
         strcpy(t->name, dirs[d]);
         t->hash = sub_id;
     }
 
-    // Serialize and store
+    // Step 3: serialize + store
     void *data;
     size_t len;
-    if (tree_serialize(&tree, &data, &len) != 0)
+    if (tree_serialize(&tree, &data, &len) != 0) {
+        free(dirs);
         return -1;
+    }
 
     int rc = object_write(OBJ_TREE, data, len, id_out);
     free(data);
+    free(dirs);
 
     return rc;
 }
 
+// Entry point
 int tree_from_index(ObjectID *id_out) {
     Index index;
 
