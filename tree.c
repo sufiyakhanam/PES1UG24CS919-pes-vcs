@@ -116,8 +116,8 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 
 // ─── TODO: Implement these ──────────────────────────────────────────────────
 
-// Build a tree hierarchy from the current index and write all tree
-// objects to the object store.
+//  Build a tree hierarchy from the current index and write all tree
+//  objects to the object store.
 //
 // HINTS - Useful functions and concepts for this phase:
 //   - index_load      : load the staged files into memory
