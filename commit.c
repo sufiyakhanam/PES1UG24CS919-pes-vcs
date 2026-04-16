@@ -204,6 +204,21 @@ int commit_create(const char *message, ObjectID *commit_id_out) {
     memset(&commit, 0, sizeof(commit));
 
     commit.tree = tree_id;
+    
+    // 3. Get parent (if exists)
+    ObjectID parent_id;
+    if (head_read(&parent_id) == 0) {
+        commit.parent = parent_id;
+        commit.has_parent = 1;
+    } else {
+        commit.has_parent = 0;
+    }
+    
+    // 4. Set author + timestamp
+    snprintf(commit.author, sizeof(commit.author), "%s", pes_author());
+    commit.timestamp = (uint64_t)time(NULL);
 
+    // 5. Set message
+    snprintf(commit.message, sizeof(commit.message), "%s", message);
 
 }
